@@ -1,7 +1,7 @@
 /* ========= CONFIG ========= */
 const GOOGLE_SCRIPT_URL =
   'https://script.google.com/macros/s/AKfycbwy_aKGV9xAd9sBJRGG66LohrR3s0l_DbDCnOveCEHaE_RGjNqgTHbkiBX8ngks3-nO/exec';
-const APP_VERSION = 'v13 - Com Estoque Sistema';
+const APP_VERSION = 'v13.1 - Correção Decimais Estoque';
 const ENVIO_DELAY_MS = 500;
 
 // Configuração para busca de estoque (Do Script do Site)
@@ -140,16 +140,14 @@ async function carregarEstoqueDoSistema() {
             if(!item.SKU) return;
             const sku = String(item.SKU).trim();
             const isGranel = (item.CATEGORIA || '').toUpperCase() === 'GRANEL';
-            let estoqueVal = parseFloat(item.ESTOQUE || '0');
             
-            // O script do site multiplica por 1000 se for granel para mostrar em gramas?
-            // "if (stockInGrams < 100...)"
-            // No app de inventário trabalhamos com KG. 
-            // Se o CSV vem com 10.5 (kg) ou 10500 (g)?
-            // Geralmente sistemas de gestão exportam a unidade base. 
-            // Vendo o script do site: "const stockInGrams = product.stock * 1000;"
-            // Isso implica que product.stock (do CSV) está em KG.
-            // Então vamos manter o valor cru do CSV como KG.
+            // CORREÇÃO: Trata a vírgula como separador decimal
+            // Ex: "2,34" vira "2.34" para o JavaScript entender
+            let estoqueString = String(item.ESTOQUE || '0').replace(',', '.');
+            let estoqueVal = parseFloat(estoqueString);
+            
+            // Fallback caso dê NaN
+            if (isNaN(estoqueVal)) estoqueVal = 0;
             
             MAPA_ESTOQUE_SISTEMA[sku] = {
                 estoque: estoqueVal,
@@ -213,8 +211,13 @@ function atualizaDisplayEstoque(codigo) {
             // Se for granel, mostra com 3 casas decimais kg
             valorTexto = itemSistema.estoque.toFixed(3) + " kg";
         } else {
-            // Se unitário, inteiro
-            valorTexto = Math.floor(itemSistema.estoque) + " un";
+            // Se unitário, inteiro, mas se tiver quebrado mostra até 2 casas
+            // Math.floor removido para garantir que 0.5 un não vire 0
+            if (Number.isInteger(itemSistema.estoque)) {
+                valorTexto = itemSistema.estoque + " un";
+            } else {
+                valorTexto = itemSistema.estoque.toFixed(2).replace('.',',') + " un";
+            }
         }
         estoqueSistemaDisplay.textContent = valorTexto;
         
