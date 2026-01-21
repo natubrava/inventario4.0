@@ -1,9 +1,9 @@
 // Incremente a versão do cache sempre que arquivos importantes (app.js, index.html) forem alterados.
-const CACHE_NAME = 'inventario-granel-cache-v12'; // NOVA VERSÃO DO CACHE
+const CACHE_NAME = 'inventario-granel-cache-v13'; // ATUALIZADO V13
 const urlsToCache = [
   './',
-  './index.html', // Atualizado
-  './app.js',     // Atualizado
+  './index.html',
+  './app.js',
   './manifest.json',
   './potes.json',
   // CDNs
@@ -12,11 +12,11 @@ const urlsToCache = [
 ];
 
 self.addEventListener('install', event => {
-  console.log('[Service Worker] Instalando v12...');
+  console.log('[Service Worker] Instalando v13...');
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('[Service Worker] Fazendo cache dos arquivos da aplicação v12');
+        console.log('[Service Worker] Fazendo cache dos arquivos da aplicação v13');
         const networkRequests = urlsToCache.map(url => fetch(url, { cache: 'reload' }));
         return Promise.all(networkRequests)
           .then(responses => {
@@ -26,7 +26,7 @@ self.addEventListener('install', event => {
                 return caches.match(urlsToCache[index]).then(cached => cached || null);
               }
               const responseToCache = response.clone();
-              console.log(`[Service Worker] Cacheando da rede: ${urlsToCache[index]}`)
+              // console.log(`[Service Worker] Cacheando da rede: ${urlsToCache[index]}`)
               return cache.put(urlsToCache[index], responseToCache);
             });
             return Promise.all(cachePromises);
@@ -34,16 +34,16 @@ self.addEventListener('install', event => {
       })
       .then(() => {
         self.skipWaiting();
-        console.log('[Service Worker] Instalação completa v12, skipWaiting chamado.');
+        console.log('[Service Worker] Instalação completa v13, skipWaiting chamado.');
       })
       .catch(error => {
-        console.error('[Service Worker] Falha na instalação do cache v12:', error);
+        console.error('[Service Worker] Falha na instalação do cache v13:', error);
       })
   );
 });
 
 self.addEventListener('activate', event => {
-  console.log('[Service Worker] Ativando v12...');
+  console.log('[Service Worker] Ativando v13...');
   event.waitUntil(
     caches.keys().then(keyList => {
       return Promise.all(keyList.map(key => {
@@ -53,13 +53,25 @@ self.addEventListener('activate', event => {
         }
       }));
     }).then(() => {
-      console.log('[Service Worker] Cache limpo, ativado e pronto para controlar clientes v12.');
+      console.log('[Service Worker] Cache limpo, ativado e pronto para controlar clientes v13.');
       return self.clients.claim();
     })
   );
 });
 
 self.addEventListener('fetch', event => {
+  const requestUrl = new URL(event.request.url);
+
+  // LOGICA IMPORTANTE: Ignorar cache para requisições da Planilha do Google ou Proxies
+  // Isso garante que o estoque do sistema esteja sempre atualizado
+  if (requestUrl.href.includes('docs.google.com') || 
+      requestUrl.href.includes('api.allorigins.win') || 
+      requestUrl.href.includes('corsproxy.io')) {
+      // Retorna direto da rede, sem tentar cachear
+      event.respondWith(fetch(event.request));
+      return;
+  }
+
   if (event.request.method === 'POST') {
     event.respondWith(fetch(event.request).catch(error => {
         console.error('[Service Worker] Erro no fetch POST:', error);
@@ -81,7 +93,7 @@ self.addEventListener('fetch', event => {
             }
             return networkResponse;
         }).catch(error => {
-            console.error('[Service Worker] Erro ao buscar na rede (Stale-While-Revalidate):', event.request.url, error);
+            // console.error('[Service Worker] Erro ao buscar na rede (Stale-While-Revalidate):', event.request.url, error);
             if (!cachedResponse) throw error;
         });
         return cachedResponse || fetchPromise;
