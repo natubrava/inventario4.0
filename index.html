@@ -77,6 +77,8 @@
       box-shadow: 0 0 8px rgba(251, 191, 36, 0.7), 0 0 12px rgba(251, 191, 36, 0.5); /* Sombra amarela/ambar mais intensa no foco */
       outline: none; /* Remove o outline padrão do browser, pois já temos o brilho */
     }
+    
+    .estoque-label { font-size: 0.7rem; text-transform: uppercase; color: #6b7280; margin-right: 4px; }
   </style>
 </head>
 <body class="bg-gray-100 p-2 sm:p-4 font-sans">
@@ -97,7 +99,7 @@
   <div class="container mx-auto max-w-3xl bg-white p-4 sm:p-6 rounded shadow-md">
 
     <div class="flex justify-between items-center mb-6">
-      <h1 class="text-2xl font-bold text-gray-800">Contador de Inventário Granel</h1>
+      <h1 class="text-2xl font-bold text-gray-800">Inventário Granel</h1>
       <button id="installPwaButton" class="bg-green-500 hover:bg-green-600 text-white text-sm py-1 px-3 rounded">
         <i class="fas fa-download mr-1"></i> Instalar App
       </button>
@@ -107,7 +109,15 @@
     <div class="form-group">
       <span class="form-group-title">Detalhes do Produto</span>
       <div>
-        <label for="codigoProduto" class="block text-sm font-medium text-gray-700">Código do Produto</label>
+        <!-- LAYOUT ALTERADO: Estoque do Sistema alinhado com o Label -->
+        <div class="flex justify-between items-end mb-1">
+            <label for="codigoProduto" class="block text-sm font-medium text-gray-700">Código do Produto</label>
+            <div id="estoqueSistemaContainer" class="hidden bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                <span class="estoque-label">EstoqAtual:</span>
+                <span id="estoqueSistemaDisplay" class="text-sm font-bold text-blue-700">--</span>
+            </div>
+        </div>
+        
         <input type="text" id="codigoProduto" placeholder="Código"
                class="mt-1 block w-full border border-gray-300 p-2 rounded" enterkeyhint="next">
         <div id="nomeProdutoDisplay"></div>
