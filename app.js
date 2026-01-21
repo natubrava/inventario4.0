@@ -1,13 +1,23 @@
 /* ========= CONFIG ========= */
 const GOOGLE_SCRIPT_URL =
-  'https://script.google.com/macros/s/AKfycbwy_aKGV9xAd9sBJRGG66LohrR3s0l_DbDCnOveCEHaE_RGjNqgTHbkiBX8ngks3-nO/exec'; // Mantido o último URL funcional
-const APP_VERSION = '30-abr-2025 - Opção Limpar Tudo'; // Versão Atualizada
+  'https://script.google.com/macros/s/AKfycbwy_aKGV9xAd9sBJRGG66LohrR3s0l_DbDCnOveCEHaE_RGjNqgTHbkiBX8ngks3-nO/exec';
+const APP_VERSION = 'v13 - Com Estoque Sistema';
 const ENVIO_DELAY_MS = 500;
 
+// Configuração para busca de estoque (Do Script do Site)
+const STOCK_CONFIG = {
+  SHEET_CSV_URL: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS6FsKfgWJxQBzkKSP3ekD-Tbb7bfvGs_Df9aUT9bkv8gPL8dySYVkMmFdlajdrgxLZUs3pufrc0ZX8/pub?gid=1353948690&single=true&output=csv',
+  PROXIES: [
+    'https://api.allorigins.win/raw?url=',
+    'https://corsproxy.io/?',
+  ]
+};
+
 /* ========= VARS ========= */
-const ITENS_KEY = 'inv_granel_itens_v5_final'; // Mantendo chave
+const ITENS_KEY = 'inv_granel_itens_v5_final';
 const NOME_USUARIO_KEY = 'inventarioGranelUsuario';
 let nomeUsuario = '', enviando = false, letraPoteSel = 'Nenhuma', itens = [], MAPA = {};
+let MAPA_ESTOQUE_SISTEMA = {}; // Novo mapa para estoque
 let editandoItemId = null;
 
 /* refs DOM */
@@ -26,10 +36,14 @@ const codigoInp=$('codigoProduto'), nomeDiv=$('nomeProdutoDisplay'),
       spanLetra=$('letraPoteSelecionado'), enviarTodosBtn=$('enviarTodosBtn'),
       textoBotaoEnviar=$('textoBotaoEnviar'),
       totalizadorPendentes=$('totalizadorPendentes'),
-      btnLimpar=$('limparSessaoLocalBtn'), // Botão único agora
+      btnLimpar=$('limparSessaoLocalBtn'),
       btnAlterarNome=$('alterarNomeBtn'), salvaNmBtn=$('salvarNomeUsuarioBtn'),
       closeModalNomeBtn=$('closeModalNomeBtn'),
       calculoPesoLiquidoDisplay=$('calculoPesoLiquidoDisplay');
+
+// Novos elementos para estoque
+const estoqueSistemaContainer = $('estoqueSistemaContainer');
+const estoqueSistemaDisplay = $('estoqueSistemaDisplay');
 
 const codigoProdutoError = $('codigoProdutoError');
 const pesoTaraKgError = $('pesoTaraKgError');
@@ -43,7 +57,8 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   console.log('App carregado:', APP_VERSION);
   setupEventListeners();
   carregaLocais();
-  await carregaPotes();
+  await carregaPotes(); // Carrega produtos locais (potes.json)
+  carregarEstoqueDoSistema(); // Carrega estoque online (CSV) em background
   renderizaLista();
   verificaNomeUsuario();
   updateBotaoRegistrar();
@@ -80,6 +95,12 @@ function setupEventListeners() {
   });
 
   codigoInp.addEventListener('blur', buscaTaraAutomatica);
+  // Adiciona evento de input para atualizar estoque enquanto digita (opcional, mas bom)
+  codigoInp.addEventListener('input', () => {
+      const codigo = codigoInp.value.trim();
+      atualizaDisplayEstoque(codigo);
+  });
+  
   letras.addEventListener('click', handleTaraRapidaClick);
   const btnNenhumaFixo = document.querySelector('.tara-button[data-letra="Nenhuma"]');
   if (btnNenhumaFixo) {
@@ -88,8 +109,131 @@ function setupEventListeners() {
   taraInp.addEventListener('input', handleTaraManualInput);
   btnReg.addEventListener('click', handleRegistrarOuSalvarItem);
   enviarTodosBtn.addEventListener('click', enviarTodos);
-  btnLimpar.addEventListener('click', limparItensLocaisComOpcao); // Chama a nova função
+  btnLimpar.addEventListener('click', limparItensLocaisComOpcao);
 }
+
+/* ---------- Lógica de Estoque do Sistema (CSV) ---------- */
+async function carregarEstoqueDoSistema() {
+    console.log("Iniciando carga de estoque do sistema...");
+    // Mostra indicador discreto se desejar, ou apenas loga
+    try {
+        let response;
+        const urlComTimestamp = STOCK_CONFIG.SHEET_CSV_URL + '&t=' + Date.now(); // Cache busting na URL
+        
+        try {
+            // Tenta fetch direto primeiro (pode falhar por CORS)
+            response = await fetch(urlComTimestamp, { cache: 'no-store' });
+            if (!response.ok) throw new Error('Falha direta');
+        } catch (e) {
+            console.log("Tentando via proxy...");
+            response = await fetchWithProxy(STOCK_CONFIG.SHEET_CSV_URL);
+        }
+
+        const csvText = await response.text();
+        const linhas = parseCSVSimples(csvText);
+        
+        // Processa CSV para MAPA_ESTOQUE_SISTEMA
+        // SKU -> Quantidade Formatada
+        MAPA_ESTOQUE_SISTEMA = {};
+        
+        linhas.forEach(item => {
+            if(!item.SKU) return;
+            const sku = String(item.SKU).trim();
+            const isGranel = (item.CATEGORIA || '').toUpperCase() === 'GRANEL';
+            let estoqueVal = parseFloat(item.ESTOQUE || '0');
+            
+            // O script do site multiplica por 1000 se for granel para mostrar em gramas?
+            // "if (stockInGrams < 100...)"
+            // No app de inventário trabalhamos com KG. 
+            // Se o CSV vem com 10.5 (kg) ou 10500 (g)?
+            // Geralmente sistemas de gestão exportam a unidade base. 
+            // Vendo o script do site: "const stockInGrams = product.stock * 1000;"
+            // Isso implica que product.stock (do CSV) está em KG.
+            // Então vamos manter o valor cru do CSV como KG.
+            
+            MAPA_ESTOQUE_SISTEMA[sku] = {
+                estoque: estoqueVal,
+                isGranel: isGranel
+            };
+        });
+        
+        console.log(`Estoque Sistema Carregado: ${Object.keys(MAPA_ESTOQUE_SISTEMA).length} itens.`);
+        
+        // Se já tiver código digitado, atualiza
+        if(codigoInp.value) atualizaDisplayEstoque(codigoInp.value);
+
+    } catch (error) {
+        console.error("Erro ao carregar estoque do sistema:", error);
+    }
+}
+
+async function fetchWithProxy(url) {
+  const errors = [];
+  for (const proxy of STOCK_CONFIG.PROXIES) {
+    try {
+      const response = await fetch(proxy + encodeURIComponent(url), { cache: 'no-store' });
+      if (response.ok) return response;
+    } catch (error) {
+      continue;
+    }
+  }
+  throw new Error('Falha nos proxies');
+}
+
+function parseCSVSimples(csvText) {
+  const lines = csvText.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+  
+  return lines.slice(1).map(line => {
+    // Regex simples para CSV que lida com aspas
+    const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/); 
+    const obj = {};
+    headers.forEach((header, index) => {
+      obj[header] = (values[index] || '').trim().replace(/^"|"$/g, '');
+    });
+    return obj;
+  });
+}
+
+function atualizaDisplayEstoque(codigo) {
+    codigo = String(codigo).trim();
+    if (!codigo) {
+        estoqueSistemaContainer.classList.add('hidden');
+        return;
+    }
+
+    const itemSistema = MAPA_ESTOQUE_SISTEMA[codigo];
+    
+    if (itemSistema) {
+        estoqueSistemaContainer.classList.remove('hidden');
+        // Formatação
+        let valorTexto = "";
+        if (itemSistema.isGranel) {
+            // Se for granel, mostra com 3 casas decimais kg
+            valorTexto = itemSistema.estoque.toFixed(3) + " kg";
+        } else {
+            // Se unitário, inteiro
+            valorTexto = Math.floor(itemSistema.estoque) + " un";
+        }
+        estoqueSistemaDisplay.textContent = valorTexto;
+        
+        // Feedback visual se negativo
+        if (itemSistema.estoque < 0) {
+            estoqueSistemaDisplay.classList.add('text-red-600');
+            estoqueSistemaDisplay.classList.remove('text-blue-700');
+        } else {
+            estoqueSistemaDisplay.classList.remove('text-red-600');
+            estoqueSistemaDisplay.classList.add('text-blue-700');
+        }
+        
+    } else {
+        // Código não encontrado na planilha do sistema
+        // Oculta ou mostra "ND" (Não Disponível)? Ocultar é mais "clean".
+        estoqueSistemaContainer.classList.add('hidden');
+    }
+}
+
 
 /* ---------- Nome Usuário ---------- */
 function verificaNomeUsuario() {
@@ -160,6 +304,10 @@ function selecionaBotaoNenhuma() {
 /* ---------- Busca Tara Automática ---------- */
 function buscaTaraAutomatica() {
   const codigo = codigoInp.value.trim(); limpaErroCampo(codigoProdutoError);
+  
+  // Atualiza display de estoque
+  atualizaDisplayEstoque(codigo);
+
   const produto = MAPA[codigo];
   pesoComPoteInp.classList.remove('input-auto-filled');
   if (produto) {
@@ -178,7 +326,7 @@ function buscaTaraAutomatica() {
         }
     }
   } else {
-    if(codigo) nomeDiv.textContent = 'Produto não cadastrado'; else nomeDiv.textContent = '';
+    if(codigo) nomeDiv.textContent = 'Produto não cadastrado localmente'; else nomeDiv.textContent = '';
   }
   updateBotaoRegistrar(); atualizaDisplayCalculoPeso();
 }
@@ -207,28 +355,22 @@ function limparItensLocaisComOpcao() {
         return;
     }
 
-    // Primeira confirmação: intenção geral de limpar
     if (confirm("Deseja limpar itens da lista local?\n(Itens enviados com sucesso serão mantidos por padrão)")) {
-
-        // Segunda confirmação: limpar TUDO?
         if (confirm("Limpar TAMBÉM os itens já enviados com sucesso? (OK = Limpar TUDO, Cancelar = Limpar só Pendentes/Falhas)")) {
-            // Limpar TUDO
             itens = [];
             salvaLocais();
             mostraStatus('Toda a lista local foi limpa.', 'success');
         } else {
-            // Limpar apenas pendentes e com falha
             const itensPendentesAntes = itens.filter(item => item.statusEnvio !== 'sucesso').length;
             if (itensPendentesAntes === 0) {
                 mostraStatus('Nenhum item pendente ou com falha para limpar.', 'info');
                 return;
             }
-            itens = itens.filter(item => item.statusEnvio === 'sucesso'); // Mantém apenas os enviados
+            itens = itens.filter(item => item.statusEnvio === 'sucesso');
             salvaLocais();
             mostraStatus(`Itens pendentes/com falha (${itensPendentesAntes}) foram limpos.`, 'success');
         }
     }
-    // Se cancelou a primeira confirmação, não faz nada.
 }
 
 
@@ -305,6 +447,11 @@ function handleRegistrarOuSalvarItem() {
 function limparFormulario() {
     codigoInp.value = ''; taraInp.value = ''; pesoComPoteInp.value = ''; pesoExtraInp.value = '';
     nomeDiv.textContent = ''; calculoPesoLiquidoDisplay.textContent = "";
+    
+    // Limpa display de estoque
+    estoqueSistemaContainer.classList.add('hidden');
+    estoqueSistemaDisplay.textContent = '--';
+
     pesoComPoteInp.classList.remove('input-auto-filled');
     selecionaBotaoNenhuma(); editandoItemId = null;
     textoBotaoRegistrar.textContent = 'Registrar Item Localmente';
@@ -321,6 +468,10 @@ function iniciarEdicaoItem(id) {
     pesoComPoteInp.value = itemParaEditar.pesoComPote.toFixed(3);
     pesoExtraInp.value = itemParaEditar.pesoExtra.toFixed(3);
     nomeDiv.textContent = itemParaEditar.nomeProduto;
+    
+    // Atualiza estoque ao editar
+    atualizaDisplayEstoque(itemParaEditar.codigo);
+
     desmarcaBotoesTara(); letraPoteSel = itemParaEditar.letraPote;
     const btnLetra = document.querySelector(`.tara-button[data-letra="${letraPoteSel}"]`);
     if (btnLetra) { btnLetra.classList.add('selected'); btnLetra.querySelector('i')?.classList.remove('hidden');}
@@ -337,34 +488,27 @@ function iniciarEdicaoItem(id) {
 /* ---------- Renderizar Lista de Pendentes (MODIFICADO) ---------- */
 function renderizaLista() {
   tbody.innerHTML = '';
-
-  // Filtra itens pendentes e calcula totais APENAS dos pendentes
   const itensPendentes = itens.filter(item => item.statusEnvio !== 'sucesso');
   let pesoLiquidoTotalPendente = 0;
   itensPendentes.forEach(item => pesoLiquidoTotalPendente += item.pesoLiquido);
-  // Atualiza o totalizador para mostrar apenas a contagem e peso dos PENDENTES
   totalizadorPendentes.textContent = `Pendentes: ${itensPendentes.length} | P.Líq. Pendente: ${pesoLiquidoTotalPendente.toFixed(3)} kg`;
 
-  // Verifica se há itens TOTAIS (enviados ou não) para exibir na tabela
   if (itens.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-500 py-4">Nenhum item registrado localmente.</td></tr>';
     enviarTodosBtn.disabled = true;
-    textoBotaoEnviar.textContent = 'Enviar Pendentes'; // Reset texto botão
+    textoBotaoEnviar.textContent = 'Enviar Pendentes';
     return;
   }
-
-  // Habilita/desabilita botão de enviar baseado nos itens PENDENTES
   enviarTodosBtn.disabled = enviando || itensPendentes.length === 0;
   textoBotaoEnviar.textContent = itensPendentes.length > 0 ? `Enviar ${itensPendentes.length} Pendente(s)` : 'Nenhum Pendente';
 
-  // Renderiza TODOS os itens, mas aplica estilos diferentes
   [...itens].reverse().forEach((item) => {
     const tr = document.createElement('tr');
     let rowClass = '';
     if (item.statusEnvio === 'sucesso') {
-        rowClass = 'item-enviado'; // Classe para fundo verde
+        rowClass = 'item-enviado';
     } else if (item.statusEnvio === 'falha') {
-        rowClass = 'item-falha'; // Classe para fundo vermelho
+        rowClass = 'item-falha';
     }
     tr.className = rowClass;
 
@@ -427,14 +571,13 @@ async function enviarTodos() {
     } catch (error) { console.error('Falha ao enviar item:', item.id, error); falhasCount++; const indexOriginal = itens.findIndex(original => original.id === item.id); if (indexOriginal > -1) itens[indexOriginal].statusEnvio = 'falha'; mostraStatus(`Falha item ${item.codigo}: ${error.message}`, 'error', 5000, progresso); await new Promise(resolve => setTimeout(resolve, ENVIO_DELAY_MS * 1.5)); }
     if (i < itensParaEnviarAgora.length - 1) { await new Promise(resolve => setTimeout(resolve, ENVIO_DELAY_MS)); }
   }
-  salvaLocais(); // Salva os status de envio atualizados
-  enviando = false; btnLimpar.disabled = false; updateBotaoRegistrar(); renderizaLista(); // Re-renderiza para atualizar botão e lista
+  salvaLocais();
+  enviando = false; btnLimpar.disabled = false; updateBotaoRegistrar(); renderizaLista();
   progressBarContainer.style.display = 'none';
   if (falhasCount === 0 && enviadosComSucessoCount > 0) { mostraStatus(`Todos os ${enviadosComSucessoCount} itens pendentes foram enviados com sucesso!`, 'success'); }
   else if (falhasCount > 0 && enviadosComSucessoCount > 0) { mostraStatus(`${enviadosComSucessoCount} itens enviados, ${falhasCount} falharam.`, 'error'); }
   else if (falhasCount > 0 && enviadosComSucessoCount === 0) { mostraStatus(`Falha ao enviar todos os ${falhasCount} itens.`, 'error'); }
   else if (enviadosComSucessoCount === 0 && falhasCount === 0 && itensParaEnviarAgora.length > 0) { mostraStatus('Nenhum item processado. Verifique.', 'info'); }
-  // Não mostra "Não havia itens para enviar" aqui, pois já foi verificado no início
 }
 
 async function enviarItem(item) {
